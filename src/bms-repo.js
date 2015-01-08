@@ -1,6 +1,7 @@
 var schema = require('./name-schema.js').schema;
 var data_name_pattern = require('./name-schema.js').data_name_pattern;
 var data_points = require('./name-schema.js').data_points;
+var tsToBuffer = require('./timestamp.js').tsToBuffer;
 
 var ndn = require('ndn-js');
 var keyChain = require('./fake-keychain.js').keyChain;
@@ -53,7 +54,16 @@ function onInterest(prefix, interest, transport)
 	  else
 	    where_clause += ' AND ';
 
-	  where_clause += name + "='" + request_name.get(pos).toEscapedString() + "'";
+	  var literal; 
+	  if (name !== 'ts')
+	    literal = connection.escape(request_name.get(pos).toEscapedString());
+	  else
+	    {
+	      var ts_num = parseInt(request_name.get(pos).getValueAsBuffer().toString('hex'), 16);
+	      var ts = new Date(ts_num);
+	      literal = connection.escape(ts);
+	    }
+	  where_clause += name + " = " + literal;
 	}
     }
 
@@ -85,35 +95,10 @@ function onInterest(prefix, interest, transport)
       //TODO: check exclude filter
     }
 
-//   if (request_name.size() > schema[0].pos)
-//     {
-//       var where_clause = ' WHERE ';
-//       for (var i = 0; i < schema.length; i++)
-// 	{
-// 	  var name = schema[i].name;
-// 	  var pos = schema[i].pos;
-// 	  if (pos >= request_name.size())
-// 	    break;
-
-// 	  if (i != 0)
-// 	    where_clause += ' AND ';
-
-// 	  where_clause += name + "='" + request_name.get(pos).toEscapedString() + "'";
-// 	}
-//       select_query += where_clause;
-//     }
-
-//   // Order result based on child selector
-//   var child_selector = interest.getChildSelector();
-//   if (child_selector == null || child_selector == ndn.Interest.CHILD_SELECTOR_LEFT)
-//     select_query += ' ORDER BY ts ASC';
-//   else
-//     select_query += ' ORDER BY ts DESC';
-
   // Limit returned result to be top 1
   select_query += ' LIMIT 1';
 
-  console.log('query:', select_query);
+  console.log('query: %s', select_query);
 
   connection.query(select_query,
 		   function(err, rows, fields) {
@@ -122,7 +107,31 @@ function onInterest(prefix, interest, transport)
 			 console.error('select error');
 			 return;
 		       }
-		     console.log(rows);
+
+		     //console.log(rows);
+		     var row = rows[0];
+		     var data_name = new ndn.Name('/');
+		     data_name_pattern.forEach(function(item) {
+			 if (typeof item !== 'number')
+			   data_name.append(item);
+			 else
+			   {
+			     var name = schema[item].name;
+			     if (name !== 'ts')
+			       data_name.append(row[name]);
+			     else
+			       data_name.append(tsToBuffer(row[name]));
+			   }
+		       });
+		     console.log('name: %s', data_name.toUri());
+
+		     var data = new ndn.Data(data_name);
+		     var content = JSON.stringify({ts: row['ts'].getTime(), val: row['val']});
+		     data.setContent(content);
+		     //data.getMetaInfo().setFreshnessPeriod(4000);
+		     keyChain.sign(data, certificateName);
+		     var wire = data.wireEncode();
+		     transport.send(wire.buf());
 		   });
 }
 

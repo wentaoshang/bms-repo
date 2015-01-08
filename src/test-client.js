@@ -1,4 +1,5 @@
 var ndn = require('ndn-js');
+var tsToBuffer = require('./timestamp.js').tsToBuffer;
 
 var onData = function(interest, data) {
   console.log("Data received in callback.");
@@ -15,7 +16,13 @@ var onTimeout = function(interest) {
 
 var face = new ndn.Face(new ndn.UnixTransport(),
 			new ndn.UnixTransport.ConnectionInfo('/tmp/nfd.sock'));
+
 var name = new ndn.Name("/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage");
+name.append(tsToBuffer(new Date('Thu Jan 08 2015 18:04:07 GMT-0800 (PST)')));
+console.log("Express name " + name.toUri());
+face.expressInterest(name, onData, onTimeout);
+
+name = new ndn.Name("/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage");
 console.log("Express name " + name.toUri());
 face.expressInterest(name, onData, onTimeout);
 
