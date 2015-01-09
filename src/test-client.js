@@ -45,10 +45,31 @@ var test_cases = {
      var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
      console.log('Request %s with exclude filter', name.toUri());
      var ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:13 GMT-0800 (PST)'));
-     var ts_component = new ndn.Name().append(ts);
+     var ts_component = (new ndn.Name().append(ts)).get(0);
      var filter = new ndn.Exclude([ndn.Exclude.ANY, ts]);
      var template = new ndn.Interest();
      template.setChildSelector(0);
+     template.setExclude(filter);
+     face.expressInterest(name, template, onData, onTimeout);
+   },
+
+   function () {
+     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/J/demand');
+     console.log('Request %s with exclude filter', name.toUri());
+     var filter = new ndn.Exclude();
+     filter.appendAny();
+     var ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:07 GMT-0800 (PST)'));
+     filter.appendComponent(ts);
+     ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:11 GMT-0800 (PST)'));
+     filter.appendComponent(ts);
+     filter.appendAny();
+     ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:19 GMT-0800 (PST)'));
+     filter.appendComponent(ts);
+     ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:23 GMT-0800 (PST)'));
+     filter.appendComponent(ts);
+     filter.appendAny();
+     var template = new ndn.Interest();
+     template.setChildSelector(1);
      template.setExclude(filter);
      face.expressInterest(name, template, onData, onTimeout);
    },

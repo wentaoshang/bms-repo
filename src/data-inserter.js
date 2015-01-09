@@ -25,7 +25,7 @@ var num_of_samples = 10;
 
 data_points.forEach(function(element) {
     var name = new ndn.Name(element.name);
-    var start_ts = (new Date()) - num_of_samples * 2000;
+    var start_ts = new Date('Thu Jan 08 2015 18:04:07 GMT-0800 (PST)');
 
     for (var d = 0; d < num_of_samples; d++)
       {
