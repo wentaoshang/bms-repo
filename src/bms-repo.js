@@ -3,6 +3,8 @@ var data_name_pattern = require('./name-schema.js').data_name_pattern;
 var data_points = require('./name-schema.js').data_points;
 var tsToBuffer = require('./timestamp.js').tsToBuffer;
 
+var crypto = require('crypto');
+
 var ndn = require('ndn-js');
 var keyChain = require('./fake-keychain.js').keyChain;
 var certificateName = require('./fake-keychain.js').certificateName;
@@ -48,6 +50,14 @@ function onInterest(prefix, interest, transport)
   else if (dispatcher === 'symkey')
     fetchSymkey(prefix, interest, transport);
 }
+
+var passwd = 'bad_password';
+var salt = 'bms-ucla';
+var iterations = 1024;
+var symkey = new Buffer(crypto.pbkdf2Sync(passwd, salt, iterations, 32));
+var iv = new Buffer('0123456789abcdef', 'ascii');
+//console.log('symkey: %s', symkey.toString('hex'));
+//console.log('iv: %s', iv.toString('hex'));
 
 function fetchData(prefix, interest, transport)
 {
@@ -268,7 +278,10 @@ function fetchData(prefix, interest, transport)
 
 		     var data = new ndn.Data(data_name);
 		     var content = JSON.stringify({ts: row['ts'].getTime(), val: row['val']});
-		     data.setContent(content);
+		     var cipher = crypto.createCipheriv('aes-256-cbc', symkey, iv);
+		     var p1 = cipher.update(content, 'utf8');
+		     var p2 = cipher.final();
+		     data.setContent(Buffer.concat([iv, p1, p2]));
 		     //data.getMetaInfo().setFreshnessPeriod(4000);
 		     keyChain.sign(data, certificateName);
 		     var wire = data.wireEncode();

@@ -1,10 +1,25 @@
 var ndn = require('ndn-js');
 var tsToBuffer = require('./timestamp.js').tsToBuffer;
 
+var crypto = require('crypto');
+var passwd = 'bad_password';
+var salt = 'bms-ucla';
+var iterations = 1024;
+var symkey = new Buffer(crypto.pbkdf2Sync(passwd, salt, iterations, 32));
+//console.log('symkey: %s', symkey.toString('hex'));
+
 function onData(interest, data) {
   console.log('Data received in callback.');
   console.log('Name: %s', data.getName().toUri());
-  console.log('Content: %s', data.getContent().buf().toString());
+  var content = data.getContent().buf();
+  console.log('Raw content (hex): %s', content.toString('hex'));
+  var iv = content.slice(0, 16);
+  //console.log('iv: %s', iv.toString('hex'));
+  var ciphertext = content.slice(16);
+  var decipher = crypto.createDecipheriv('aes-256-cbc', symkey, iv);
+  var p1 = decipher.update(ciphertext);
+  var p2 = decipher.final();
+  console.log('Decrypted content: %s', Buffer.concat([p1, p2]).toString());
   test_cases.runNextCase();
 };
 
