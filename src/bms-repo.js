@@ -4,6 +4,9 @@ var data_points = require('./name-schema.js').data_points;
 var tsToBuffer = require('./timestamp.js').tsToBuffer;
 
 var crypto = require('crypto');
+var RSA = require('node-rsa');
+var usr_key = require('./client-key.js').usr_key;
+var usr_key_id = require('./client-key.js').usr_key_id;
 
 var ndn = require('ndn-js');
 var keyChain = require('./fake-keychain.js').keyChain;
@@ -291,6 +294,13 @@ function fetchData(prefix, interest, transport)
 
 function fetchSymkey(prefix, interest, transport)
 {
+  var data = new ndn.Data(interest.getName());
+  var content = usr_key.encrypt(symkey);
+  data.setContent(content);
+  //data.getMetaInfo().setFreshnessPeriod(4000);
+  keyChain.sign(data, certificateName);
+  var wire = data.wireEncode();
+  transport.send(wire.buf());
 }
 
 function onRegisterFailed(prefix)
