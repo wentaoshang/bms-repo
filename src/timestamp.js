@@ -1,4 +1,5 @@
-exports.tsToBuffer = function (value) {
+exports.tsToBuffer = function (ts) {
+  var value = ts.getTime();  // convert to number first!
   if (value <= 0)
     return new Buffer([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
 
