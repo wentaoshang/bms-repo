@@ -4,7 +4,8 @@ create table data(building varchar(40) not null,
                   devid varchar(40) not null,
                   datatype varchar(40) not null,
                   ts timestamp not null,
-                  val double not null
+                  val double not null,
+                  wire blob not null
 );
 
 create table symkey(building varchar(40) not null,
@@ -13,5 +14,6 @@ create table symkey(building varchar(40) not null,
                     devid varchar(40) not null,
                     datatype varchar(40) not null,
                     ts timestamp not null,
-                    val binary(32) not null
+                    val binary(32) not null,
+                    wire blob not null
 );

@@ -7,7 +7,8 @@ exports.schema =
    { name: 'devid', pos: 7 },
    { name: 'datatype', pos: 8},
    { name: 'ts', pos: 9 },
-   { name: 'val', pos: null }
+   { name: 'val', pos: null },
+   { name: 'wire', pos: null }
    ];
 
 // Mapping from name components to db schema index (zero indexed)

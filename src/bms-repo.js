@@ -1,12 +1,8 @@
 var schema = require('./name-schema.js').schema;
 var data_name_pattern = require('./name-schema.js').data_name_pattern;
+var symkey_name_pattern = require('./name-schema.js').symkey_name_pattern;
 var data_points = require('./name-schema.js').data_points;
 var tsToBuffer = require('./timestamp.js').tsToBuffer;
-
-var crypto = require('crypto');
-var RSA = require('node-rsa');
-var usr_key = require('./client-key.js').usr_key;
-var usr_key_id = require('./client-key.js').usr_key_id;
 
 var ndn = require('ndn-js');
 var keyChain = require('./fake-keychain.js').keyChain;
@@ -30,285 +26,316 @@ connection.connect(function(err) {
       }
 
     console.log('connected to mysql as id ' + connection.threadId);
+
+    run();
   });
 
-var face = new ndn.Face(new ndn.UnixTransport(),
-			new ndn.UnixTransport.ConnectionInfo('/tmp/nfd.sock'));
-face.setCommandSigningInfo(keyChain, certificateName);
-
-var data_prefix = new ndn.Name('/test/ucla.edu/bms');
-
-function onInterest(prefix, interest, transport)
+function run()
 {
-  var inst_name = interest.getName();
-  console.log('interest: %s', inst_name.toUri());
-  var dispatcher;
-  if (inst_name.size() < 5)
-    dispatcher = 'data';
-  else
-    dispatcher = inst_name.get(4).toEscapedString();
+  var face = new ndn.Face(new ndn.UnixTransport(),
+			  new ndn.UnixTransport.ConnectionInfo('/tmp/nfd.sock'));
+  face.setCommandSigningInfo(keyChain, certificateName);
 
-  if (dispatcher === 'data')
-    fetchData(prefix, interest, transport);
-  else if (dispatcher === 'symkey')
-    fetchSymkey(prefix, interest, transport);
-}
+  var data_prefix = new ndn.Name('/ndn/ucla.edu/bms');
 
-var passwd = 'bad_password';
-var salt = 'bms-ucla';
-var iterations = 1024;
-var symkey = new Buffer(crypto.pbkdf2Sync(passwd, salt, iterations, 32));
-var iv = new Buffer('0123456789abcdef', 'ascii');
-//console.log('symkey: %s', symkey.toString('hex'));
-//console.log('iv: %s', iv.toString('hex'));
+  function onInterest(prefix, interest, transport)
+  {
+    var inst_name = interest.getName();
+    console.log('interest: %s', inst_name.toUri());
+    var dispatcher;
+    if (inst_name.size() < 5)
+      dispatcher = 'data';
+    else
+      dispatcher = inst_name.get(4).toEscapedString();
 
-function fetchData(prefix, interest, transport)
-{
-  var request_name = interest.getName();
-  var select_query = 'SELECT * FROM data';
+    if (dispatcher === 'data')
+      fetchData(prefix, interest, transport);
+    else if (dispatcher === 'symkey')
+      fetchSymkey(prefix, interest, transport);
+  }
 
-  // Parse name to extract filter
-  var where_clause = ' WHERE ';
-  var need_where = false;
-  for (var i = 0; i < request_name.size(); i++)
-    {
-      var column = data_name_pattern[i];
-      if (typeof column === 'number')
-	{
-	  var name = schema[column].name;
-	  var pos = schema[column].pos; // pos must equal to i
+  function fetchData(prefix, interest, transport)
+  {
+    var request_name = interest.getName();
+    var select_query = 'SELECT * FROM data';
 
-	  if (need_where === false)
-	    need_where = true;
-	  else
-	    where_clause += ' AND ';
+    // Parse name to extract filter
+    var where_clause = ' WHERE ';
+    var need_where = false;
+    for (var i = 0; i < request_name.size(); i++)
+      {
+	var column = data_name_pattern[i];
+	if (typeof column === 'number')
+	  {
+	    var name = schema[column].name;
+	    var pos = schema[column].pos; // pos must equal to i
 
-	  var literal; 
-	  if (name !== 'ts')
-	    literal = connection.escape(request_name.get(pos).toEscapedString());
-	  else
-	    {
-	      var ts_num = parseInt(request_name.get(pos).getValueAsBuffer().toString('hex'), 16);
-	      var ts = new Date(ts_num);
-	      literal = connection.escape(ts);
-	    }
-	  where_clause += name + " = " + literal;
-	}
-    }
+	    if (need_where === false)
+	      need_where = true;
+	    else
+	      where_clause += ' AND ';
 
-  // Find the component where the selectors take effect
-  if (request_name.size() <= data_name_pattern.length)
-    {
-      var selecting_component = data_name_pattern[request_name.size()];
-      var order_by = ' ORDER BY ';
-      var need_order_by = false;
-      if (typeof selecting_component === 'number')
-	{
-	  need_order_by = true;
-	  var selecting_name = schema[selecting_component].name;
-	  order_by += selecting_name;
+	    var literal; 
+	    if (name !== 'ts')
+	      literal = connection.escape(request_name.get(pos).toEscapedString());
+	    else
+	      {
+		var ts_num = parseInt(request_name.get(pos).getValueAsBuffer().toString('hex'),
+				      16);
+		var ts = new Date(ts_num);
+		literal = connection.escape(ts);
+	      }
+	    where_clause += name + " = " + literal;
+	  }
+      }
 
-	  // Order result based on child selector
-	  var child_selector = interest.getChildSelector();
-	  if (child_selector == null || child_selector == ndn.Interest.CHILD_SELECTOR_LEFT)
-	    order_by += ' ASC';
-	  else
-	    order_by += ' DESC';
+    // Find the component where the selectors take effect
+    if (request_name.size() <= data_name_pattern.length)
+      {
+	var selecting_component = data_name_pattern[request_name.size()];
+	var order_by = ' ORDER BY ';
+	var need_order_by = false;
+	if (typeof selecting_component === 'number')
+	  {
+	    need_order_by = true;
+	    var selecting_name = schema[selecting_component].name;
+	    order_by += selecting_name;
 
-	  // Add exclude filter to WHERE clause
-	  var filter = interest.getExclude();
-	  if (filter != null)
-	    {
-	      // Convert exclude to ranges
-	      var exclude_ranges = [];
-	      var lower = null;
-	      var upper = null;
-	      var i = 0;
-	      while (i < filter.size())
-		{
-		  if (filter.get(i) == ndn.Exclude.ANY)
-		    {
-		      if (i + 1 < filter.size()
-			  && filter.get(i + 1) == ndn.Exclude.ANY)
-			{
-			  // Skip '* *' pattern
-			  i++;
-			  continue;
-			}
+	    // Order result based on child selector
+	    var child_selector = interest.getChildSelector();
+	    if (child_selector == null || child_selector == ndn.Interest.CHILD_SELECTOR_LEFT)
+	      order_by += ' ASC';
+	    else
+	      order_by += ' DESC';
 
-		      if (i + 2 < filter.size()
-			  && filter.get(i + 1) != ndn.Exclude.ANY
-			  && filter.get(i + 2) == ndn.Exclude.ANY)
-			{
-			  // Skip '* X *' pattern
-			  i += 2;
-			  continue;
-			}
+	    // Add exclude filter to WHERE clause
+	    var filter = interest.getExclude();
+	    if (filter != null)
+	      {
+		// Convert exclude to ranges
+		var exclude_ranges = [];
+		var lower = null;
+		var upper = null;
+		var i = 0;
+		while (i < filter.size())
+		  {
+		    if (filter.get(i) == ndn.Exclude.ANY)
+		      {
+			if (i + 1 < filter.size()
+			    && filter.get(i + 1) == ndn.Exclude.ANY)
+			  {
+			    // Skip '* *' pattern
+			    i++;
+			    continue;
+			  }
 
-		      if (i + 1 < filter.size())
-			{
-			  upper = filter.get(i + 1);
-			}
+			if (i + 2 < filter.size()
+			    && filter.get(i + 1) != ndn.Exclude.ANY
+			    && filter.get(i + 2) == ndn.Exclude.ANY)
+			  {
+			    // Skip '* X *' pattern
+			    i += 2;
+			    continue;
+			  }
 
-		      var lower_literal = null;
-		      var upper_literal = null;
-		      if (selecting_name !== 'ts')
-			{
-			  if (lower != null)
-			    lower_literal = connection.escape(lower.toEscapedString());
-			  if (upper != null)
-			    upper_literal = connection.escape(upper.toEscapedString());
-			}
-		      else
-			{
-			  if (lower != null)
-			    {
-			      var ts_num = parseInt(lower.getValueAsBuffer().toString('hex'), 16);
-			      var ts = new Date(ts_num);
-			      lower_literal = connection.escape(ts);
-			    }
-			  if (upper != null)
-			    {
-			      var ts_num = parseInt(upper.getValueAsBuffer().toString('hex'), 16);
-			      var ts = new Date(ts_num);
-			      upper_literal = connection.escape(ts);
-			    }			  
-			}
+			if (i + 1 < filter.size())
+			  {
+			    upper = filter.get(i + 1);
+			  }
 
-		      if (lower_literal != null && upper_literal != null)
-			// [..., X, *, Y, ...]
-			exclude_ranges.push(selecting_name + ' >= ' + lower_literal
-					    + ' AND ' + selecting_name + ' <= ' + upper_literal);
-		      else if (lower != null && upper == null)
-			// [..., X, *]
-			exclude_ranges.push(selecting_name + ' >= ' + lower_literal);
-		      else if (lower == null && upper != null)
-			// [*, X, ...]
-			exclude_ranges.push(selecting_name + ' <= ' + upper_literal);
-		      // Ignore the case like [*]
+			var lower_literal = null;
+			var upper_literal = null;
+			if (selecting_name !== 'ts')
+			  {
+			    if (lower != null)
+			      lower_literal = connection.escape(lower.toEscapedString());
+			    if (upper != null)
+			      upper_literal = connection.escape(upper.toEscapedString());
+			  }
+			else
+			  {
+			    if (lower != null)
+			      {
+				var ts_num = parseInt(lower.getValueAsBuffer().toString('hex'),
+						      16);
+				var ts = new Date(ts_num);
+				lower_literal = connection.escape(ts);
+			      }
+			    if (upper != null)
+			      {
+				var ts_num = parseInt(upper.getValueAsBuffer().toString('hex'),
+						      16);
+				var ts = new Date(ts_num);
+				upper_literal = connection.escape(ts);
+			      }			  
+			  }
 
-		      lower = null;
-		      upper = null;
-		      i += 2;
-		    }
-		  else if (lower != null)
-		    {
-		      // [..., X, Y, ...]
-		      exclude_ranges.push(selecting_name + ' = '
-					  + connection.escape(lower.toEscapedString()));
-		      lower = null;
-		      i++;
-		    }
-		  else
-		    {
-		      lower = filter.get(i);
-		      i++;
-		    }
-		}
+			if (lower_literal != null && upper_literal != null)
+			  // [..., X, *, Y, ...]
+			  exclude_ranges.push(selecting_name + ' >= ' + lower_literal
+					      + ' AND ' + selecting_name + ' <= ' + upper_literal);
+			else if (lower != null && upper == null)
+			  // [..., X, *]
+			  exclude_ranges.push(selecting_name + ' >= ' + lower_literal);
+			else if (lower == null && upper != null)
+			  // [*, X, ...]
+			  exclude_ranges.push(selecting_name + ' <= ' + upper_literal);
+			// Ignore the case like [*]
 
-	      //console.log(exclude_ranges);
-	      if (exclude_ranges.length > 0)
-		{
-		  if (need_where === false)
-		    need_where = true;
-		  else
-		    where_clause += ' AND ';
+			lower = null;
+			upper = null;
+			i += 2;
+		      }
+		    else if (lower != null)
+		      {
+			// [..., X, Y, ...]
+			exclude_ranges.push(selecting_name + ' = '
+					    + connection.escape(lower.toEscapedString()));
+			lower = null;
+			i++;
+		      }
+		    else
+		      {
+			lower = filter.get(i);
+			i++;
+		      }
+		  }
 
-		  var exclude_where = 'NOT (';
-		  for (var i = 0; i < exclude_ranges.length; i++)
-		    {
-		      exclude_where += '(' + exclude_ranges[i] + ')';
-		      if (i < exclude_ranges.length - 1)
-			exclude_where += ' OR ';
-		    }
-		  exclude_where += ')';
+		//console.log(exclude_ranges);
+		if (exclude_ranges.length > 0)
+		  {
+		    if (need_where === false)
+		      need_where = true;
+		    else
+		      where_clause += ' AND ';
 
-		  where_clause += exclude_where;
-		}
-	    }
-	}
-      else
-	{
-	  // If selecting a 'constant' component, just verify exclude filter
-	  // and ignore child selector
+		    var exclude_where = 'NOT (';
+		    for (var i = 0; i < exclude_ranges.length; i++)
+		      {
+			exclude_where += '(' + exclude_ranges[i] + ')';
+			if (i < exclude_ranges.length - 1)
+			  exclude_where += ' OR ';
+		      }
+		    exclude_where += ')';
 
-	  //TODO: check exclude filter
-	}
-    }
+		    where_clause += exclude_where;
+		  }
+	      }
+	  }
+	else
+	  {
+	    // If selecting a 'constant' component, just verify exclude filter
+	    // and ignore child selector
 
-  // Assemble the query
-  if (need_where)
+	    //TODO: check exclude filter
+	  }
+      }
+
+    // Assemble the query
+    if (need_where)
+      select_query += where_clause;
+
+    if (need_order_by)
+      select_query += order_by;
+
+    // Limit returned result to be top 1
+    select_query += ' LIMIT 1';
+
+    console.log('query: %s', select_query);
+
+    connection.query(select_query,
+		     function(err, rows, fields) {
+		       if (err)
+			 {
+			   console.error('select error');
+			   return;
+			 }
+
+		       if (rows.length == 0)
+			 {
+			   console.log('empty result');
+			   return;
+			 }
+
+		       var row = rows[0];
+		       console.log(row);
+		       transport.send(row['wire']);
+		     });
+  }
+
+  function fetchSymkey(prefix, interest, transport)
+  {
+    var request_name = interest.getName();
+    if (request_name.size() != symkey_name_pattern.length)
+      return;
+
+    var select_query = 'SELECT * FROM symkey';
+
+    // Parse name to extract filter
+    var where_clause = ' WHERE ';
+    var need_where = false;
+    for (var i = 0; i < request_name.size(); i++)
+      {
+	var column = data_name_pattern[i];
+	if (typeof column === 'number')
+	  {
+	    var name = schema[column].name;
+	    var pos = schema[column].pos; // pos must equal to i
+
+	    if (need_where === false)
+	      need_where = true;
+	    else
+	      where_clause += ' AND ';
+
+	    var literal; 
+	    if (name !== 'ts')
+	      literal = connection.escape(request_name.get(pos).toEscapedString());
+	    else
+	      {
+		var ts_num = parseInt(request_name.get(pos).getValueAsBuffer().toString('hex'),
+				      16);
+		var ts = new Date(ts_num);
+		literal = connection.escape(ts);
+	      }
+	    where_clause += name + " = " + literal;
+	  }
+      }
+
+    // Assemble the query
     select_query += where_clause;
 
-  if (need_order_by)
-    select_query += order_by;
+    // Limit returned result to be top 1
+    select_query += ' LIMIT 1';
 
-  // Limit returned result to be top 1
-  select_query += ' LIMIT 1';
+    console.log('query: %s', select_query);
 
-  console.log('query: %s', select_query);
+    connection.query(select_query,
+		     function(err, rows, fields) {
+		       if (err)
+			 {
+			   console.error('select error');
+			   return;
+			 }
 
-  connection.query(select_query,
-		   function(err, rows, fields) {
-		     if (err)
-		       {
-			 console.error('select error');
-			 return;
-		       }
+		       if (rows.length == 0)
+			 {
+			   console.log('empty result');
+			   return;
+			 }
 
-		     //console.log(rows);
-		     if (rows.length == 0)
-		       {
-			 //console.log('empty result');
-			 return;
-		       }
+		       var row = rows[0];
+		       console.log(row);
+		       transport.send(row['wire']);
+		     });
+  }
 
-		     var row = rows[0];
-		     var data_name = new ndn.Name('/');
-		     data_name_pattern.forEach(function(item) {
-			 if (typeof item !== 'number')
-			   data_name.append(item);
-			 else
-			   {
-			     var name = schema[item].name;
-			     if (name !== 'ts')
-			       data_name.append(row[name]);
-			     else
-			       data_name.append(tsToBuffer(row[name]));
-			   }
-		       });
-		     console.log('name: %s', data_name.toUri());
+  function onRegisterFailed(prefix)
+  {
+    console.log('register failed for prefix', prefix.toUri());
+    face.close();
+    connection.end();
+  }
 
-		     var data = new ndn.Data(data_name);
-		     var content = JSON.stringify({ts: row['ts'].getTime(), val: row['val']});
-		     var cipher = crypto.createCipheriv('aes-256-cbc', symkey, iv);
-		     var p1 = cipher.update(content, 'utf8');
-		     var p2 = cipher.final();
-		     data.setContent(Buffer.concat([iv, p1, p2]));
-		     //data.getMetaInfo().setFreshnessPeriod(4000);
-		     keyChain.sign(data, certificateName);
-		     var wire = data.wireEncode();
-		     transport.send(wire.buf());
-		   });
+  console.log('register prefix', data_prefix.toUri());
+  face.registerPrefix(data_prefix, onInterest, onRegisterFailed);
 }
-
-function fetchSymkey(prefix, interest, transport)
-{
-  var data = new ndn.Data(interest.getName());
-  var content = usr_key.encrypt(symkey);
-  data.setContent(content);
-  //data.getMetaInfo().setFreshnessPeriod(4000);
-  keyChain.sign(data, certificateName);
-  var wire = data.wireEncode();
-  transport.send(wire.buf());
-}
-
-function onRegisterFailed(prefix)
-{
-  console.log('register failed for prefix', prefix.toUri());
-  face.close();
-  connection.end();
-}
-
-console.log('register prefix', data_prefix.toUri());
-face.registerPrefix(data_prefix, onInterest, onRegisterFailed);

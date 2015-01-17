@@ -5,37 +5,49 @@ var crypto = require('crypto');
 var passwd = 'bad_password';
 var salt = 'bms-ucla';
 var iterations = 1024;
-var symkey = new Buffer(crypto.pbkdf2Sync(passwd, salt, iterations, 32));
-//console.log('symkey: %s', symkey.toString('hex'));
-
-var RSA = require('node-rsa');
-var usr_key = require('./client-key.js').usr_key;
-var usr_key_id = require('./client-key.js').usr_key_id;
+var usr_key = new Buffer(crypto.pbkdf2Sync(passwd, salt, iterations, 32));
 
 function onData(interest, data) {
   console.log('Data received in callback.');
-  console.log('Name: %s', data.getName().toUri());
+  var data_name = data.getName();
+  console.log('Name: %s', data_name.toUri());
   var content = data.getContent().buf();
   console.log('Raw content (hex): %s', content.toString('hex'));
 
-  var dispatcher = data.getName().get(4).toEscapedString();
-  if (dispatcher === 'data')
+  if (initial_ts == null)
     {
-      var iv = content.slice(0, 16);
-      //console.log('iv: %s', iv.toString('hex'));
-      var ciphertext = content.slice(16);
-      var decipher = crypto.createDecipheriv('aes-256-cbc', symkey, iv);
-      var p1 = decipher.update(ciphertext);
-      var p2 = decipher.final();
-      console.log('Decrypted content: %s', Buffer.concat([p1, p2]).toString());
+      var ts_num = parseInt(data_name.get(-1).getValueAsBuffer().toString('hex'), 16);
+      initial_ts = new Date(ts_num);
+      console.log('initial_ts, %s', initial_ts);
     }
-  else if (dispatcher === 'symkey')
-    {
-      var decrypted = usr_key.decrypt(content);
-      console.log('Original symkey: %s', symkey.toString('hex'));
-      console.log('Decrypted symkey: %s', decrypted.toString('hex'));
-    }
-  test_cases.runNextCase();
+
+  var symkey_ts = content.slice(0, 8);  // timestamp length = 8
+  var data_iv = content.slice(8, 24);  // iv length = 16
+  var raw_data = content.slice(24);  // the rest is encrypted data 
+
+  var onSymKey = function (key_inst, key_data) {
+    var key_content = key_data.getContent().buf();
+    var key_iv = key_content.slice(0, 16);
+    var ciphertext = key_content.slice(16);
+    var decipher = crypto.createDecipheriv('aes-256-cbc', usr_key, key_iv);
+    var p1 = decipher.update(ciphertext);
+    var p2 = decipher.final();
+    var symkey = Buffer.concat([p1, p2]);
+    console.log('Symkey: %s', symkey.toString('hex'));
+
+    decipher = crypto.createDecipheriv('aes-256-cbc', symkey, data_iv);
+    p1 = decipher.update(raw_data);
+    p2 = decipher.final();
+    var msg = Buffer.concat([p1, p2]);
+    console.log('Decrypted data: %s', msg.toString());
+
+    test_cases.runNextCase();
+  };
+
+  var symkey_name = new ndn.Name(data_name);
+  symkey_name.components[4] = new ndn.Name.Component('symkey');
+  symkey_name.components[9] = new ndn.Name.Component(symkey_ts);
+  face.expressInterest(symkey_name, onSymKey, onTimeout);
 };
 
 function onTimeout(interest) {
@@ -47,24 +59,27 @@ function onTimeout(interest) {
 var face = new ndn.Face(new ndn.UnixTransport(),
 			new ndn.UnixTransport.ConnectionInfo('/tmp/nfd.sock'));
 
+var initial_ts = null;
+
 var test_cases = {
  index: 0,
  cases:
- [function () {
-      var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
-      name.append(tsToBuffer(new Date('Thu Jan 08 2015 18:04:07 GMT-0800 (PST)')));
+ [
+  function () {
+      var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
       console.log('Request %s', name.toUri());
       face.expressInterest(name, onData, onTimeout);
     },
 
    function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
+     var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
+     name.append(tsToBuffer(new Date(initial_ts + 2000)));
      console.log('Request %s', name.toUri());
      face.expressInterest(name, onData, onTimeout);
    },
 
    function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
+     var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
      console.log('Request %s with child selector', name.toUri());
      var template = new ndn.Interest();
      template.setChildSelector(1);
@@ -72,9 +87,9 @@ var test_cases = {
    },
 
    function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
+     var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz/data/studio1/electrical/AH8/voltage');
      console.log('Request %s with exclude filter', name.toUri());
-     var ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:13 GMT-0800 (PST)'));
+     var ts = tsToBuffer(new Date(initial_ts + 2000));
      var ts_component = (new ndn.Name().append(ts)).get(0);
      var filter = new ndn.Exclude([ndn.Exclude.ANY, ts]);
      var template = new ndn.Interest();
@@ -84,18 +99,18 @@ var test_cases = {
    },
 
    function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical/J/demand');
+     var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz/data/studio1/electrical/J/demand');
      console.log('Request %s with exclude filter', name.toUri());
      var filter = new ndn.Exclude();
      filter.appendAny();
-     var ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:07 GMT-0800 (PST)'));
+     var ts = tsToBuffer(new Date(initial_ts));
      filter.appendComponent(ts);
-     ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:11 GMT-0800 (PST)'));
+     ts = tsToBuffer(new Date(initial_ts.getTime() + 2000));
      filter.appendComponent(ts);
      filter.appendAny();
-     ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:19 GMT-0800 (PST)'));
+     ts = tsToBuffer(new Date(initial_ts.getTime() + 6000));
      filter.appendComponent(ts);
-     ts = tsToBuffer(new Date('Thu Jan 08 2015 18:04:23 GMT-0800 (PST)'));
+     ts = tsToBuffer(new Date(initial_ts.getTime() + 10000));
      filter.appendComponent(ts);
      filter.appendAny();
      var template = new ndn.Interest();
@@ -105,19 +120,13 @@ var test_cases = {
    },
 
    function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/data/studio1/electrical');
+     var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz/data/studio1/electrical');
      console.log('Request %s', name.toUri());
      face.expressInterest(name, onData, onTimeout);
    },
 
    function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz');
-     console.log('Request %s', name.toUri());
-     face.expressInterest(name, onData, onTimeout);
-   },
-
-   function () {
-     var name = new ndn.Name('/test/ucla.edu/bms/melnitz/symkey/studio1/electrical/AH8/voltage');
+     var name = new ndn.Name('/ndn/ucla.edu/bms/melnitz');
      console.log('Request %s', name.toUri());
      face.expressInterest(name, onData, onTimeout);
    },
